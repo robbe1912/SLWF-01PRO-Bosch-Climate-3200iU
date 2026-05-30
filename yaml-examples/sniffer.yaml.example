@@ -1,0 +1,240 @@
+# ============================================================
+# UART Sniffer v2 — Active Query Buttons
+# For Bosch Climate 3200iU via SLWF-01PRO r2.1
+#
+# Changes from v1:
+#   - Added 3 query buttons: Status (0xC0), Capabilities (0xB5 x2)
+#   - TX frames labeled with >> TX [QUERY_xx] prefix
+#   - RX frames labeled with << RX [TYPE] prefix
+#   - Includes midea_helpers.h for CRC8 + checksum
+#
+# Usage:
+#   1. Flash to unit 1 via web_server OTA
+#   2. Press a query button (e.g., "Query Status")
+#   3. Wait 2-3 seconds for response
+#   4. Press "Dump UART Log" to see both TX and RX frames
+#   5. When done, flash back bosch-ac-unit1.yaml
+# ============================================================
+
+substitutions:
+  name: bosch-ac-sniffer
+  friendly_name: "AC Sniffer (Unit 1)"
+
+esphome:
+  name: "${name}"
+  friendly_name: "${friendly_name}"
+  includes:
+    - midea_helpers.h
+
+esp8266:
+  board: esp12e
+  enable_serial: true
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  ap:
+    ssid: "${name} Fallback"
+    password: !secret fallback_ap_password
+
+captive_portal:
+
+logger:
+  baud_rate: 0
+
+api:
+  encryption:
+    key: !secret api_encryption_key_unit1
+
+ota:
+  - platform: esphome
+    password: !secret ota_password
+
+web_server:
+  port: 80
+
+# Raw UART — same pins as production firmware
+uart:
+  id: uart_bus
+  tx_pin: 12
+  rx_pin: 14
+  baud_rate: 9600
+  debug:
+    direction: RX
+    dummy_receiver: true
+    after:
+      timeout: 200ms
+    sequence:
+      - lambda: |-
+          // Format RX bytes as hex with frame type annotation
+          char hex[4];
+          std::string line = "<< RX ";
+          for (auto b : bytes) {
+            sprintf(hex, "%02X ", b);
+            line += hex;
+          }
+          // Annotate frame type (byte 9)
+          if (bytes.size() >= 10) {
+            uint8_t ft = bytes[9];
+            const char* name = "???";
+            switch (ft) {
+              case 0x02: name = "CMD_RESP"; break;
+              case 0x03: name = "QUERY_RESP"; break;
+              case 0x04: name = "NET_STATUS"; break;
+              case 0x05: name = "PARAMS_NOTIFY"; break;
+              case 0x07: name = "ELEC_ID"; break;
+              case 0x40: name = "CONTROL"; break;
+              case 0x63: name = "HEARTBEAT"; break;
+            }
+            char tag[48];
+            sprintf(tag, " [%s", name);
+            line += tag;
+            // For query response, show data ID (byte 10)
+            if (ft == 0x03 && bytes.size() >= 11) {
+              sprintf(tag, " ID=%02X", bytes[10]);
+              line += tag;
+            }
+            line += "]";
+          }
+          line += "\n";
+          auto &buf = id(frame_log);
+          buf += line;
+          if (buf.size() > 6000) {
+            buf = buf.substr(buf.size() - 5000);
+          }
+          id(frame_count)++;
+
+# Ring buffer + query message ID
+globals:
+  - id: frame_log
+    type: std::string
+    restore_value: no
+  - id: frame_count
+    type: int
+    restore_value: no
+  - id: query_msg_id
+    type: int
+    restore_value: no
+    initial_value: '0'
+
+# Frame counter
+sensor:
+  - platform: template
+    name: "Captured Frames"
+    lambda: 'return id(frame_count);'
+    update_interval: 10s
+    accuracy_decimals: 0
+
+# UART dump output
+text_sensor:
+  - platform: template
+    id: uart_dump
+    name: "UART Dump"
+    update_interval: never
+    icon: "mdi:format-text"
+
+# ============================================================
+# QUERY BUTTONS — Send Midea UART queries to AC
+# ============================================================
+# Frame format:
+#   AA [LEN] AC 00 00 00 00 00 00 03 [PAYLOAD...] [CRC8] [CHECKSUM]
+# CRC8: over payload bytes only (bytes 10 to N-3)
+# Checksum: two's complement of bytes 1 to N-2 (includes CRC)
+# ============================================================
+
+button:
+  # --- Query Status (0xC0) ---
+  # Sends: AA 21 AC 00 00 00 00 00 00 03 41 81 00 FF 03 FF 00 02 00x12 03 <ID> <CRC> <CHK>
+  # Response: frame type 0x03, data ID 0xC0 — full AC status
+  - platform: template
+    name: "Query Status (0xC0)"
+    icon: "mdi:thermometer"
+    on_press:
+      - lambda: |-
+          uint8_t q[34] = {
+            0xAA, 0x21, 0xAC, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x03,
+            0x41, 0x81, 0x00, 0xFF, 0x03, 0xFF, 0x00, 0x02,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x03, 0x00, 0x00, 0x00
+          };
+          // Set incrementing message ID
+          q[31] = (uint8_t)(id(query_msg_id)++);
+          // CRC8 over payload (bytes 10-31, 22 bytes)
+          q[32] = midea_crc8(q, 10, 22);
+          // Checksum over bytes 1-32 (32 bytes, includes CRC)
+          q[33] = midea_checksum(q, 1, 32);
+          // Log TX
+          auto &buf = id(frame_log);
+          buf += midea_hex_line(">> TX [QUERY_C0] ", q, 34) + "\n";
+          if (buf.size() > 6000) buf = buf.substr(buf.size() - 5000);
+          // Send
+          id(uart_bus).write_array(q, 34);
+          id(uart_bus).flush();
+
+  # --- Query Capabilities #1 (0xB5) ---
+  # Sends: AA 0E AC 00 00 00 00 00 00 03 B5 01 11 <CRC> <CHK>
+  # Response: frame type 0x03, data ID 0xB5 — capabilities report
+  - platform: template
+    name: "Query Capabilities (0xB5)"
+    icon: "mdi:chip"
+    on_press:
+      - lambda: |-
+          uint8_t q[15] = {
+            0xAA, 0x0E, 0xAC, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x03,
+            0xB5, 0x01, 0x11, 0x00, 0x00
+          };
+          // CRC8 over payload (bytes 10-12, 3 bytes)
+          q[13] = midea_crc8(q, 10, 3);
+          // Checksum over bytes 1-13 (13 bytes)
+          q[14] = midea_checksum(q, 1, 13);
+          auto &buf = id(frame_log);
+          buf += midea_hex_line(">> TX [QUERY_B5_1] ", q, 15) + "\n";
+          if (buf.size() > 6000) buf = buf.substr(buf.size() - 5000);
+          id(uart_bus).write_array(q, 15);
+          id(uart_bus).flush();
+
+  # --- Query Capabilities #2 (0xB5 second) ---
+  # Sends: AA 0F AC 00 00 00 00 00 00 03 B5 01 01 00 <CRC> <CHK>
+  # Response: extended capabilities
+  - platform: template
+    name: "Query Capabilities #2 (0xB5)"
+    icon: "mdi:chip"
+    on_press:
+      - lambda: |-
+          uint8_t q[16] = {
+            0xAA, 0x0F, 0xAC, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x03,
+            0xB5, 0x01, 0x01, 0x00, 0x00, 0x00
+          };
+          // CRC8 over payload (bytes 10-13, 4 bytes)
+          q[14] = midea_crc8(q, 10, 4);
+          // Checksum over bytes 1-14 (14 bytes)
+          q[15] = midea_checksum(q, 1, 14);
+          auto &buf = id(frame_log);
+          buf += midea_hex_line(">> TX [QUERY_B5_2] ", q, 16) + "\n";
+          if (buf.size() > 6000) buf = buf.substr(buf.size() - 5000);
+          id(uart_bus).write_array(q, 16);
+          id(uart_bus).flush();
+
+  # --- Dump/Clear/Restart ---
+  - platform: template
+    name: "Dump UART Log"
+    icon: "mdi:download"
+    on_press:
+      - lambda: |-
+          if (id(frame_log).empty()) {
+            id(uart_dump).publish_state("(no frames captured)");
+          } else {
+            id(uart_dump).publish_state(id(frame_log));
+          }
+
+  - platform: template
+    name: "Clear UART Log"
+    icon: "mdi:delete"
+    on_press:
+      - lambda: |-
+          id(frame_log).clear();
+          id(frame_count) = 0;
+          id(uart_dump).publish_state("(log cleared)");
+
+  - platform: restart
+    name: "Restart Sniffer"

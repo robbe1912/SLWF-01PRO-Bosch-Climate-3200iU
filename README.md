@@ -16,6 +16,8 @@ Extends the upstream ESPHome Midea climate component with **ionizer control**, *
 | **Display mute toggle** | ❌ (capability-gated) | ✅ (bypassed) |
 | **Timer ON (0–24h, 15min steps)** | ❌ | ✅ |
 | **Timer OFF (0–24h, 15min steps)** | ❌ | ✅ |
+| **Fan speed slider (0–100%)** | ❌ | ✅ (0=Auto, 1–100=manual) |
+| **AC as source of truth** | ❌ (dirty state) | ✅ (polls every 5s) |
 
 ## Hardware
 
@@ -23,6 +25,7 @@ Extends the upstream ESPHome Midea climate component with **ionizer control**, *
 - **AC**: Bosch Climate 3200iU (multi-split or single)
 - **Protocol**: Midea UART, 9600 baud, TX=GPIO12 RX=GPIO14 (software UART)
 - **Also works with**: Any Midea-OEM AC that supports anion/ionizer via byte 9 bit 5
+- **No soldering needed** — plug the dongle into the indoor unit's WiFi module port and flash via USB or OTA. All features work over UART. No IR LED required.
 
 ## Installation
 
@@ -90,8 +93,15 @@ All new keys go under the `climate:` platform: midea block.
 | `mute` | switch | Display mute toggle (read: on=muted, toggle-only write) |
 | `timer_on` | number | ON timer in minutes (0–1440, step 15). 0 = disabled |
 | `timer_off` | number | OFF timer in minutes (0–1440, step 15). 0 = disabled |
+| `fan_speed` | number | Fan speed percentage (0–100). 0 = Auto, 1–100 = manual speed |
 
 ## How It Works
+
+### AC as Source of Truth
+
+The upstream ESPHome component only updates HA state when the AC reports changes to *standard* climate properties (mode, temperature, fan mode, swing). Changes made via the IR remote (ionizer, mute, fan speed, timers) produce a **dirty state** — HA shows stale values.
+
+This component overrides `loop()` to poll the AC every 5 seconds for ionizer, fan speed, and timer state. A separate full status query runs every 10 seconds to capture byte 14+ data (display mute). **The AC is always the source of truth** — if you change settings with the remote, HA reflects the actual state within seconds.
 
 ### Ionizer
 
@@ -110,6 +120,14 @@ State is read from 0xC0 byte 14 mask `0x70` — `0x70` = muted, `0x00` = normal.
 Timer encoding: `byte = 0x7F + floor(minutes / 15)`. `0x7F` = no timer.
 
 Byte 4 = ON timer, byte 5 = OFF timer, byte 6 bit 4 (`0x10`) = timer active flag.
+
+### Fan Speed
+
+Reads/writes byte 3 of the 0xC0 status frame directly. Values 1–100 are manual speed percentages. Value 102 is AUTO mode.
+
+The fan speed slider maps: **0 = Auto** (sends 102 to AC), **1–100 = manual speed**. The fan mode dropdown shows: Auto (standard), 20%, 40%, 60%, 80%, 100% (custom strings), and Custom (any non-standard speed from the slider).
+
+**Note**: When in AUTO mode, the AC does not report the actual running fan speed via UART. The internal fan speed decision is made by the AC firmware and is not exposed.
 
 ## Multi-Split Limitations
 

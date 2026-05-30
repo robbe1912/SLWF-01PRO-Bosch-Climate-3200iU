@@ -79,7 +79,7 @@ Byte  Bit/Mask    Meaning                       Encoding
                                                100=FAN_ONLY, 101=AUTO/HEAT_COOL
  2    0x10        Temperature decimal            Bit 4
  2    0x0F        Temperature setpoint           Value + 16°C (1=17°C, 5=21°C)
- 3    full byte   Fan speed                     Direct percentage: 5, 20, 60, 85, 100
+ 3    full byte   Fan speed                     0–100=manual %, 102=AUTO (AC decides)
  4    full byte   ON timer                      0x7F = none, else: 0x7F + minutes/15
  5    full byte   OFF timer                     0x7F = none, else: 0x7F + minutes/15
  6    0x10        Timer active flag              1=timer running (inconsistent)
