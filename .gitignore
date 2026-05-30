@@ -1,0 +1,7 @@
+secrets.yaml
+/bin/
+/workspace/
+*.log
+*.tmp
+*.bak
+*.swp
