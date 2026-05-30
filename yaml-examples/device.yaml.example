@@ -1,0 +1,12 @@
+substitutions:
+  name: bosch-ac-unit1
+  friendly_name: "AC Living Room"
+
+external_components:
+  - source:
+      type: local
+      path: ../components
+    components: [midea]
+
+packages:
+  common: !include common.yaml

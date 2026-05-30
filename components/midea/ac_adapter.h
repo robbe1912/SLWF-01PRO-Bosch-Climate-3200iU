@@ -1,0 +1,56 @@
+#pragma once
+
+#ifdef USE_ARDUINO
+
+// MideaUART
+#include <Appliance/AirConditioner/AirConditioner.h>
+
+#include "esphome/components/climate/climate_traits.h"
+#include "air_conditioner.h"
+
+namespace esphome::midea::ac {
+
+using MideaMode = dudanov::midea::ac::Mode;
+using MideaSwingMode = dudanov::midea::ac::SwingMode;
+using MideaFanMode = dudanov::midea::ac::FanMode;
+using MideaPreset = dudanov::midea::ac::Preset;
+
+class Constants {
+ public:
+  static const char *const TAG;
+  static const char *const FREEZE_PROTECTION;
+  // Legacy fan mode names (kept for backward compat, not used in UI)
+  static const char *const SILENT;
+  static const char *const TURBO;
+  // Custom fan mode display names
+  static const char *const FAN_AUTO;
+  static const char *const FAN_20;
+  static const char *const FAN_40;
+  static const char *const FAN_60;
+  static const char *const FAN_80;
+  static const char *const FAN_100;
+  static const char *const FAN_CUSTOM;
+};
+
+class Converters {
+ public:
+  static MideaMode to_midea_mode(ClimateMode mode);
+  static ClimateMode to_climate_mode(MideaMode mode);
+  static MideaSwingMode to_midea_swing_mode(ClimateSwingMode mode);
+  static ClimateSwingMode to_climate_swing_mode(MideaSwingMode mode);
+  static MideaPreset to_midea_preset(ClimatePreset preset);
+  static MideaPreset to_midea_preset(const char *preset);
+  static bool is_custom_midea_preset(MideaPreset preset);
+  static ClimatePreset to_climate_preset(MideaPreset preset);
+  static const char *to_custom_climate_preset(MideaPreset preset);
+  static MideaFanMode to_midea_fan_mode(ClimateFanMode fan_mode);
+  static MideaFanMode to_midea_fan_mode(const char *fan_mode);
+  static bool is_custom_midea_fan_mode(MideaFanMode fan_mode);
+  static ClimateFanMode to_climate_fan_mode(MideaFanMode fan_mode);
+  static const char *to_custom_climate_fan_mode(MideaFanMode fan_mode);
+  static void to_climate_traits(ClimateTraits &traits, const dudanov::midea::ac::Capabilities &capabilities);
+};
+
+}  // namespace esphome::midea::ac
+
+#endif  // USE_ARDUINO

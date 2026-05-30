@@ -1,0 +1,96 @@
+# Common configuration for Bosch Climate 3200iU + SLWF-01PRO v2.1
+# Import this as a package in each device YAML.
+
+esp8266:
+  board: esp12e
+  enable_serial: true
+
+logger:
+  baud_rate: 0
+
+uart:
+  tx_pin: 12
+  rx_pin: 14
+  baud_rate: 9600
+
+web_server:
+  port: 80
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  ap:
+    ssid: "${name} Fallback"
+    password: !secret wifi_password
+
+api:
+  encryption:
+    key: !secret api_key
+
+ota:
+  - platform: esphome
+    password: !secret ota_password
+
+climate:
+  - platform: midea
+    id: midea_ac
+    name: "${friendly_name}"
+    autoconf: true
+    beeper: false
+    period: 1000ms
+    timeout: 2000ms
+    num_attempts: 3
+    supported_modes:
+      - HEAT_COOL
+      - COOL
+      - HEAT
+      - DRY
+      - FAN_ONLY
+    custom_fan_modes:
+      - SILENT
+      - TURBO
+    supported_presets:
+      - ECO
+      - BOOST
+      - SLEEP
+    custom_presets:
+      - FREEZE_PROTECTION
+    supported_swing_modes:
+      - VERTICAL
+      - HORIZONTAL
+      - BOTH
+    outdoor_temperature:
+      name: "${friendly_name} Outdoor Temp"
+    # === Extended features (3200iESPHome component) ===
+    ionizer:
+      name: "${friendly_name} Ionizer"
+    mute:
+      name: "${friendly_name} Display Mute"
+    timer_on:
+      name: "${friendly_name} Timer ON"
+    timer_off:
+      name: "${friendly_name} Timer OFF"
+
+# Buttons
+button:
+  - platform: template
+    name: "${friendly_name} Display Toggle"
+    on_press:
+      - midea_ac.display_toggle:
+  - platform: restart
+    name: "${friendly_name} Restart"
+
+# Diagnostic sensors
+sensor:
+  - platform: wifi_signal
+    name: "${friendly_name} WiFi Signal"
+    update_interval: 60s
+  - platform: uptime
+    name: "${friendly_name} Uptime"
+
+text_sensor:
+  - platform: wifi_info
+    ip_address:
+      name: "${friendly_name} IP"
+    ssid:
+      name: "${friendly_name} SSID"
