@@ -119,6 +119,13 @@ class AirConditioner : public ApplianceBase<dudanov::midea::ac::AirConditioner>,
   static constexpr uint32_t FULL_QUERY_INTERVAL_MS = 10000; // 10s: full 0xC0 query for mute (byte 14)
   static constexpr uint32_t FAN_SPEED_COOLDOWN_MS = 3000;   // 3s: skip fan speed poll after write
   bool full_query_pending_{false};  // Rate-limit: only one full query in-flight at a time
+  bool in_status_change_{false};    // Re-entrancy guard for on_status_change
+
+  /* Mute state persistence across AC power cycles */
+  bool last_known_mute_{false};     // Saved mute state (persisted to flash)
+  bool mute_restore_pending_{false}; // Need to restore mute after power-on
+  uint32_t power_on_detected_ms_{0}; // Timestamp when power-on was detected
+  static constexpr uint32_t MUTE_RESTORE_DELAY_MS = 2000;  // Wait 2s after power-on before toggling
 
   /** Poll m_status for ionizer + timer state (bytes 1-10 valid). */
   void poll_custom_entities();

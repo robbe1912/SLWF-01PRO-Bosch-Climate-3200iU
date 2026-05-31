@@ -32,6 +32,11 @@ template<typename T> void update_property(T &property, const T &value, bool &fla
 }
 
 void AirConditioner::on_status_change() {
+  // Re-entrancy guard: control callbacks trigger m_readStatus → sendUpdate → on_status_change
+  // If multiple responses arrive in one loop(), this prevents stack overflow
+  if (this->in_status_change_) return;
+  this->in_status_change_ = true;
+
   // Add frost protection custom preset once when autoconf completes
   if (this->base_.getAutoconfStatus() == dudanov::midea::AUTOCONF_OK &&
       this->base_.getCapabilities().supportFrostProtectionPreset() && !this->frost_protection_set_) {
@@ -54,8 +59,18 @@ void AirConditioner::on_status_change() {
   bool need_publish = false;
   update_property(this->target_temperature, this->base_.getTargetTemp(), need_publish);
   update_property(this->current_temperature, this->base_.getIndoorTemp(), need_publish);
+  ClimateMode prev_mode = this->mode;  // Save BEFORE update
   auto mode = Converters::to_climate_mode(this->base_.getMode());
   update_property(this->mode, mode, need_publish);
+
+  // Detect AC power-on: mode transitions from OFF to any active mode
+  if (prev_mode == ClimateMode::CLIMATE_MODE_OFF && mode != ClimateMode::CLIMATE_MODE_OFF) {
+    if (this->last_known_mute_ && !this->mute_restore_pending_) {
+      ESP_LOGD(Constants::TAG, "Power-on detected with saved mute=ON — scheduling restore");
+      this->mute_restore_pending_ = true;
+      this->power_on_detected_ms_ = millis();
+    }
+  }
   auto swing_mode = Converters::to_climate_swing_mode(this->base_.getSwingMode());
   update_property(this->swing_mode, swing_mode, need_publish);
   // Preset
@@ -90,6 +105,8 @@ void AirConditioner::on_status_change() {
   if (!this->last_full_status_.empty() && this->last_full_status_.size() > 14) {
     this->update_custom_entities(this->last_full_status_.data(), this->last_full_status_.size());
   }
+
+  this->in_status_change_ = false;  // Clear re-entrancy guard
 }
 
 void AirConditioner::loop() {
@@ -109,6 +126,14 @@ void AirConditioner::loop() {
   if (now - this->last_full_query_ms_ >= FULL_QUERY_INTERVAL_MS && !this->full_query_pending_) {
     this->last_full_query_ms_ = now;
     this->send_full_status_query();
+  }
+
+  // Restore mute state after AC power-on
+  if (this->mute_restore_pending_ && (now - this->power_on_detected_ms_ >= MUTE_RESTORE_DELAY_MS)) {
+    ESP_LOGD(Constants::TAG, "Restoring mute state after power-on");
+    this->mute_restore_pending_ = false;
+    this->base_.displayToggle();
+    this->last_full_query_ms_ = 0;  // Trigger immediate full query to verify
   }
 }
 
@@ -197,11 +222,16 @@ void AirConditioner::update_custom_entities(const uint8_t *raw, size_t size) {
   }
 
   // Mute (display off): byte 14 mask 0x70
+  // Only update mute memory when AC is ON — AC clears byte 14 on power-off
   if (this->mute_switch_ != nullptr && size > 14) {
     bool muted = (raw[14] & 0x70) != 0;
     ESP_LOGD(Constants::TAG, "  mute byte[14]=0x%02X → %s", raw[14], muted ? "MUTED" : "NORMAL");
     if (!this->mute_switch_->has_state() || this->mute_switch_->state != muted)
       this->mute_switch_->publish_state(muted);
+    // Persist mute state only when AC is running (not powered off)
+    if (this->mode != ClimateMode::CLIMATE_MODE_OFF) {
+      this->last_known_mute_ = muted;
+    }
   }
 
   // Timer ON: byte 4, Timer OFF: byte 5

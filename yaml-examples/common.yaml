@@ -89,18 +89,27 @@ climate:
     fan_speed:
       name: "${friendly_name} Fan Speed"
 
-# Buttons
+# Buttons (entity_category: config → shown under Configuration in HA)
 button:
-  - platform: template
-    name: "${friendly_name} Swing Step"
-    icon: mdi:arrow-up-down
-    on_press:
-      - midea_ac.swing_step:
   - platform: restart
-    name: "${friendly_name} Restart"
+    name: "${friendly_name} Restart WiFi Module"
+    entity_category: config
+  - platform: template
+    name: "${friendly_name} Power On"
+    icon: mdi:power-on
+    entity_category: config
+    on_press:
+      - midea_ac.power_on:
+  - platform: template
+    name: "${friendly_name} Power Off"
+    icon: mdi:power-off
+    entity_category: config
+    on_press:
+      - midea_ac.power_off:
   - platform: template
     name: "${friendly_name} Power Toggle"
     icon: mdi:power-standby
+    entity_category: config
     on_press:
       - midea_ac.power_toggle:
 
