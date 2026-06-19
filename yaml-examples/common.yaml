@@ -41,19 +41,39 @@ uart:
   rx_pin: 14
   baud_rate: 9600
 
-# --- WiFi ---
+# --- WiFi (hardened for ESP8266 + Asus AiMesh) ---
+# References:
+#   - https://github.com/esphome/esphome/issues/13486 (post_connect_roaming crash)
+#   - https://github.com/esphome/issues/issues/3971 (WPA3 unsupported)
+#   - ESPHome 2026.3.0 power_save_mode swap fix
 wifi:
   ssid: !secret wifi_ssid
   password: !secret wifi_password
-  power_save_mode: NONE
+
+  # === POWER ===
+  power_save_mode: NONE          # ESP8266 default (was buggy in 2026.1-2)
+  output_power: 18.5dB           # Default 20dB; 20.5dB causes unexpected restarts
+
+  # === RECONNECT / REBOOT ===
+  reboot_timeout: 5min           # Reboot if no WiFi 5min. Default 15min too lenient
+  fast_connect: true             # Skip scan, use cached BSSID+channel (PR #5931)
+
+  # === AiMesh CRITICAL FIX (ESP8266) ===
+  # Default true in 2026.1.0+ → triggers scan in system context → yield panic
+  # Causes "drops off WiFi and won't reconnect without reboot" symptom
+  post_connect_roaming: false
+
+  # === AP FALLBACK ===
   ap:
     ssid: "${name}_fallback"
     password: !secret fallback_ap_password
+    ap_timeout: 1min             # Activate fallback AP after 1min WiFi failure
 
 captive_portal:
 
 # --- Home Assistant API ---
 api:
+  reboot_timeout: 5min           # Reboot if no HA client 5min. Default 15min
   encryption:
     key: ${api_encryption_key}
 
@@ -162,6 +182,7 @@ button:
 sensor:
   - platform: wifi_signal
     name: "WiFi Signal"
+    id: wifi_signal_sensor   # referenced by wifi_watchdog interval
     update_interval: 60s
 
   - platform: uptime
@@ -173,3 +194,49 @@ text_sensor:
       name: "IP Address"
     ssid:
       name: "Connected SSID"
+
+# ============================================================
+# WIFI WATCHDOG (mimics Tasmota sustained-weak-signal reboot)
+# ============================================================
+# - Every 5min: if WiFi connected AND signal < -80dBm → increment counter
+# - Counter resets on healthy sample (>= -75dBm) or disconnect
+# - Reboot after 3 consecutive weak ticks (15min) to force AP reselection
+#
+# Native ESPHome guards (also active):
+#   wifi.reboot_timeout: 5min  → reboot if NO wifi connection
+#   api.reboot_timeout: 5min   → reboot if NO HA client
+# This watchdog catches the edge case: WiFi "connected" but stuck on a
+# weak/dying mesh node that won't roam cleanly.
+# ============================================================
+globals:
+  - id: wifi_weak_count
+    type: int
+    initial_value: '0'
+    restore_value: false
+
+interval:
+  - interval: 5min
+    then:
+      - if:
+          condition:
+            and:
+              - wifi.connected:
+              - lambda: 'return !isnan(id(wifi_signal_sensor).state) && id(wifi_signal_sensor).state < -80.0;'
+          then:
+            - globals.set:
+                id: wifi_weak_count
+                value: !lambda 'return id(wifi_weak_count) + 1;'
+            - logger.log:
+                format: "WiFi weak: rssi=%.1f dBm, count=%d/3"
+                args: ['id(wifi_signal_sensor).state', 'id(wifi_weak_count)']
+            - if:
+                condition:
+                  lambda: 'return id(wifi_weak_count) >= 3;'
+                then:
+                  - logger.log: "WiFi weak 15min sustained, rebooting to reselect AP"
+                  - lambda: 'ESP.restart();'
+          else:
+            # Healthy sample OR disconnected (native watchdog handles disconnect)
+            - globals.set:
+                id: wifi_weak_count
+                value: '0'
